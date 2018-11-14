@@ -1,29 +1,20 @@
 import math
+import copy
 
 import numpy as np
 from numpy import random
 from numpy import linalg
 
 from scipy import io
-from scipy.optimize import minimize, show_options
+from scipy.stats import multivariate_normal
 
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 
 
 def gaussian(x, mu, cov):
-    y = x - mu
-    X = y.dot(linalg.inv(cov)).dot(y.transpose())
-    return 1/math.sqrt(2*math.pi)**len(x)/linalg.det(cov)*math.exp(-X/2)
-
-def normpdf2(x, y, mu, cov):
-    z = []
-    for i in range(len(x)):
-        t=[]
-        for j in range(len(y)):
-            t.append(gaussian(np.array([x[i][j], y[i][j]]), mu, cov))
-        z.append(t)
-    return np.array(z)
+    gauss = multivariate_normal(mean=mu, cov=cov)
+    return gauss.pdf(x)
 
 def readData():
     dataFile = ['data/1.mat', 'data/2.mat', 'data/3.mat']
@@ -39,93 +30,97 @@ def readData():
     xlist = np.array([x,y]).transpose()
     return xlist
 
-def update_mu(x, p):
-    y = []
-    for i in range(len(x)):
-        y.append(x[i] * p[i])
-    return sum(y)/sum(p)
+def E_step(X, mu, cov, tau):
+    N = X.shape[0]
+    K = tau.shape[0]
+    T = np.zeros((N, K))
 
-def update_std(x, mu, p):
-    y = np.array([[0,0],[0,0]])
-    for i in range(len(x)):
-        z = x[i] - mu
-        z = z.reshape(-1, 1)
-        y = y + z.dot(z.transpose()) * p[i]
-    return y
+    prob = np.zeros((N, K))
+    for k in range(K):
+        prob[:, k] = gaussian(X, mu[k], cov[k])
+
+    for k in range(K):
+        T[:, k] = tau[k] * prob[:, k]
+    for i in range(N):
+        T[i, :] /= np.sum(T[i, :])
+    return T
 
 
+def M_step(X, T):
+    Num, Dimension = X.shape
+    K = T.shape[1]
 
+    mu = np.zeros((K, Dimension))
+    cov = []
+    tau = np.zeros(K)
 
-def main():
-    # Generating data
-    sample=readData()
+    for k in range(K):
+        SumT = np.sum(T[:, k])
+        for d in range(Dimension):
+            mu[k, d] = np.sum(np.multiply(T[:, k], X[:, d])) / SumT
+        cov_k = np.zeros((Dimension, Dimension))
+        for i in range(Num):
+            cov_k += T[i, k] * np.dot(np.expand_dims((X[i] - mu[k]),0).T , np.expand_dims((X[i] - mu[k]),0)) / SumT
+        cov.append(cov_k)
+        tau[k] = SumT / Num
+    cov = np.array(cov)
+    return mu, cov, tau
 
-    sample1=sample.transpose()
+def gmm(X, K, EPS):
 
-    plt.figure()
-    plt.scatter(sample1[0], sample1[1], marker='o')
-    plt.grid(True)
-    plt.show()
-
+    N, Dimension = X.shape
     # Initial guess of parameters and initializations
-    mu1 = np.array([np.mean(sample[0]), np.mean(sample[1])])
-    mu2 = np.array([np.mean(sample[2]), np.mean(sample[3])])
-    std1 = random.normal(0, len(sample), size=4).reshape(2, 2)
-    std2 = random.normal(0, len(sample), size=4).reshape(2, 2)
-    pi1 = 0.5
-    pi2 = 1-pi1
+    mu = np.random.rand(K, Dimension)
+    cov = np.array([np.eye(Dimension)] * K)
+    tau = np.array([1.0 / K] * K)
 
     # EM loop
-    plabel1=np.zeros(len(sample))
-    plabel2=np.zeros(len(sample))
-
     counter=0
-    criterion=0.1
-    converged=False
 
-    while not converged and counter<100:
+    while counter<100:
         counter+=1
+        print counter, tau
 
-        # Expectation
-        # Find the probabilty of labeling data points
-        for i in range(len(sample)):
-            cdf1=gaussian(sample[i], mu1, std1)
-            cdf2=gaussian(sample[i], mu2, std2)
+        old_mu = copy.deepcopy(mu)
+        T = E_step(X, mu, cov, tau)
+        mu, cov, tau = M_step(X, T)
+        if abs(np.linalg.norm(old_mu - mu)) < EPS:
+            print('Finish!')
+            break
+    return mu, cov, tau
 
-            pi2=1-pi1
+# Get data
+X_matrix = readData()
 
-            plabel1[i]=cdf1*pi1/(cdf1*pi1+cdf2*pi2)
-            plabel2[i]=cdf2*pi2/(cdf1*pi1+cdf2*pi2)
+K = 2
+EPS=1e-8
 
-        # Maximization
-        # From the labeled data points, 
-        # find mean through averaging (aka ML)
-        mu1=update_mu(sample, plabel1)
-        mu2=update_mu(sample, plabel2)
-        std1=update_std(sample, mu1, plabel1)
-        std2=update_std(sample, mu2, plabel2)    
-        pi1=sum(plabel1)/len(sample)
-        pi2=1-pi1
+mu, cov, tau = gmm(X_matrix, K, EPS)
+print('mu:',mu)
+print('cov',cov)
+print('tau',tau)
 
-    print mu1
-    print mu2
-    print std1
-    print std2
-    print pi1
-    print pi2
+#print plot in 3D space
+fig = plt.figure()
+ax = Axes3D(fig)
+plotX = X_matrix[:, 0]
+plotY = X_matrix[:, 1]
 
-    # x=np.linspace(sample[0].min(), sample[0].max(), 100)
-    # y=np.linspace(sample[1].min(), sample[1].max(), 100)
-    # x, y = np.meshgrid(x, y)
+#make the class of sample witg the higher probability
+#color different plots
+Z = np.zeros((X_matrix.shape[0], K))
+for k in range(K):
+    Z[:, k] = gaussian(X_matrix,mu[k],cov[k])
 
-    # z = normpdf2(x, y, mu1, std1)
+plotZ = np.zeros((X_matrix.shape[0],1))
+colors = ['r' for i in range(plotZ.shape[0])]
+for each in range(Z.shape[0]):
+    plotZ[each] = max(Z[each])
+    colors[each] = 'r' if np.argmax(Z[each]) == 0 else 'b'
 
-    # fig = plt.figure()
-    # ax = Axes3D(fig)
-    # plt.plot(z, normpdf2(x, y, mu1, std1))
-    # plt.plot(z, normpdf2(x, y, mu2, std2))
-    # ax.plot_surface(x,y,z, rstride=1, cstride=1, cmap='rainbow')
-    # plt.show()
-
-if __name__ == '__main__':
-    main()
+plt.title("GMM")
+ax.scatter(plotX, plotY, plotZ, color=colors)
+ax.set_xlabel('Frequency')
+ax.set_ylabel('Standard Deviation')
+ax.set_zlabel('Probability')
+plt.show()
