@@ -68,7 +68,7 @@ def M_step(X, T):
 
 def gmm(X, K, EPS):
 
-    N, Dimension = X.shape
+    _, Dimension = X.shape
     # Initial guess of parameters and initializations
     mu = np.random.rand(K, Dimension)
     cov = np.array([np.eye(Dimension)] * K)
